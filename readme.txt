@@ -1,0 +1,5 @@
+Lighting Phong, reflection and refraction
+
+This project is difficult to wrap my head around fully.  I may have gotten some understanding, but not good enough for my standards.  I am very disappointed in myself, but alas, time is up.  I have been up all day and night on this one homework project, and there is something I am missing, but Javascript, being not C++, I can't tell where I am messing up, and no matter how many tutorials I read, excerpts on graphics, books on graphics I read, no matter how many programs I implement it on, I just keep falling short.  I have tried everything it feels like, and am now at my wits end.  I don't think I can look at 3d for a couple days.  It is a mess, yes. But that is what it is.  I blame time.  Time is the issue in this scenario, for me.  I will get it.  Unfortunately, not fully now, but I do get a lot of it now, when I only wished I could in the past, so thank you for that.  Your class has taught me more than I imagined about data visualization and computer graphics.  Thank you for your time and attention.
+
+Justin Hardee

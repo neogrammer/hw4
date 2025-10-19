@@ -1,0 +1,460 @@
+<!-- // NAME: Justin Hardee
+// ASSIGNMENT: 4
+// DUE DATE 4/20/2024-->
+
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+    <script type="text/javascript" charset="utf-8" src="./renderer.js"></script>
+    <script type="text/javascript" charset="utf-8" src="lib/controls.js"></script>
+    <script type="text/javascript" charset="utf-8" src="lib/gl-matrix-min.js"></script>
+    <style type="text/css">
+      body {text-align: center;}
+      table {margin:0 auto;}
+      table td, th {text-align: left;padding:2px 10px;}
+      table th {text-align: right;}
+      canvas {border: 2px solid black;}
+      input {width:160px;}
+      div{float: right;}
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <div>
+    	<h3>Controls</h3>
+    	<table>
+    		<tr>
+    			<th>Left Mouse:</th><td>Pan</td>
+    		</tr><tr>
+    			<th>Right Mouse:</th><td>Rotate</td>
+    		</tr><tr>
+    			<th>Spacebar:</th><td>Reset Cam Position</td>
+    		</tr><tr>
+    			<th>Resolution:</th><td><button onclick="renderer.updateSize(600,600);">600x600</button>&nbsp<button onclick="renderer.updateSize(600,1200);">1200x600</button></td>
+    		</tr><tr>
+    			<th>Focal Length:</th><td><input id="iFocalLength" type="number" oninput="renderer.update();"/></td>
+    		</tr><tr>
+    			<th>Epsilon:</th><td><input id="iEpsilon" type="number" oninput="renderer.update();"/></td>
+    		</tr><tr>
+    			<th colspan="2"><button onclick="renderer.resetCameraParameters();">Reset Cam Parameters</button></th>
+			</tr>
+    	</table>
+	</div>
+
+	<script id="vertexShader" type="x-shader/x-vertex">
+		attribute vec2 aVertexPosition;
+		varying vec2 vPixelCoord;
+
+		void main(void) {
+			gl_Position = vec4(aVertexPosition, 0, 1);
+		}
+	</script>
+
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision highp float;
+
+		const float INFINITY = 1e9;
+		const int   MAX_MARCHING_STEPS = 400;
+
+		// -------------------------------------------------------------------------
+
+		// Camera uniforms
+		struct Camera
+		{
+			vec3 up;			// Up-vector
+			vec3 right;			// Right-vector
+			vec3 forward;		// Forward-vector
+			vec3 eye;			// Eye position
+			float aspectRatio;	// Ratio between screen width and height
+			float focalLength;	// Distance between the eye and the image plane
+		};
+
+		uniform Camera uCamera;
+		
+
+		// -------------------------------------------------------------------------
+
+		struct Light
+		{
+			vec3 position;
+			vec3 color;
+		};
+
+		uniform Light uLights[2];
+
+		// -------------------------------------------------------------------------
+
+		struct Settings
+		{
+			int numberSteps;	// Max number of raymarch steps
+			float epsilon;		// Surface threshold
+			vec2 resolution;	// Resolution of the view port
+		};
+
+		uniform Settings uSettings;
+
+		// -------------------------------------------------------------------------
+
+		// DISTANCE FUNCTIONS FOR OBJECTS
+
+		// plane
+		float dPlane( vec3 x )
+		{
+			return x.y;
+		}
+
+		// sphere
+		float dSphere( vec3 x, vec3 c, float r )
+		{
+			return length( x-c ) - r;
+		}
+
+		float sdTorus( vec3 p, vec2 t )
+		{
+  			vec2 q = vec2(length(p.xz)-t.x,p.y);
+  			return length(q)-t.y;
+		}
+		// -------------------------------------------------------------------------
+
+		struct Dist
+		{
+			int   index;
+			float distance;
+		};
+
+		// helper function to find if a new object is closer along a ray than the
+		// previous one; return the closer object index
+		Dist closer( Dist current, int index, float t )
+		{
+			if( t <= current.distance )
+			{
+				current.distance = t;
+				current.index    = index;
+			}
+
+			return current;
+		}
+
+		// -------------------------------------------------------------------------
+
+		// OVERALL SCENE DISTANCE FUNCTION
+
+		// return Dist instance of the object closest to the current
+		// position on the ray
+		Dist dScene( vec3 p ) //
+		{
+			Dist hit = Dist( -1, INFINITY );
+
+			hit = closer( hit, 1, dPlane(p) );
+			hit = closer( hit, 2, dSphere(p, vec3(-1.3,1.0,0), 1.0) ); //sun
+			hit = closer( hit, 3, dSphere(p, vec3(-0.55,0.8,-0.9), 0.03) ); // mercury
+			hit = closer( hit, 4, dSphere(p, vec3(-0.124,0.8,0.57), 0.1) ); // venus
+			hit = closer( hit, 5, dSphere(p, vec3(0.815,0.8,0), 0.2) ); // earth
+			
+			hit = closer( hit, 6, dSphere(p, vec3(1.07,0.85,0), 0.05) ); // moon
+
+			hit = closer( hit, 7, sdTorus(vec3(p.x+.12,p.y - 0.8,p.z-0.575), vec2(0.13,0.01 ))); // mars
+
+			hit = closer( hit, 8, dSphere(p, vec3(1.8,0.8,2.5), 0.7) ); // jupiter
+			hit = closer( hit, 9, dSphere(p, vec3(-4.5,0.8,0), 0.5) ); // saturn
+			hit = closer( hit, 10, dSphere(p, vec3(3.6,0.8,-1.30), 0.4) ); // neptune
+			hit = closer( hit, 11, dSphere(p, vec3(-6.7,0.8,0), 0.34) ); // uranus
+
+
+
+			// more objects here ...
+
+			return hit;
+		}
+
+		// use dScene and finite differences to estimate the normal of the object
+		// at position x
+		vec3 nScene( in vec3 x )
+		{
+			vec3 n;
+
+			float epsilon = uSettings.epsilon;
+
+			n.x = dScene( x + vec3(epsilon,0,0) ).distance - dScene( x - vec3(epsilon,0,0) ).distance;
+			n.y = dScene( x + vec3(0,epsilon,0) ).distance - dScene( x - vec3(0,epsilon,0) ).distance;
+			n.z = dScene( x + vec3(0,0,epsilon) ).distance - dScene( x - vec3(0,0,epsilon) ).distance;
+
+			float nl = length(n);
+
+			if( nl > 0.0 )
+				n /= nl;
+
+			return n;
+		}
+
+		// -------------------------------------------------------------------------
+
+		struct Ray
+		{
+			vec3 o; // origin
+			vec3 d; // direction (normalized)
+		};
+
+		// march along a ray using the distance field, until an object is approached
+		// very closely (ro: ray origin, rd: ray direction)
+		// returns index -1 if no hit is discovered
+		Dist raymarch( Ray r )
+		{
+			// total distance travelled -- init step still
+			float t = 0.0;
+
+
+			// Raymarching starts here
+			for(int j = 0; j < MAX_MARCHING_STEPS; j++)
+			{
+				// calculate the current position on the ray
+				vec3 pos = r.o + r.d * t;  // gives use the position along the ray based on distance from origin
+
+				// get the distance and index of the object closest to position
+				Dist result = dScene(pos);  // use pos to compute distance to the closest object in the scene
+
+				// if the distance is under the threshold, return the RayHit
+				if( result.distance < uSettings.epsilon )
+				{
+					result.distance += t;
+					return result;
+				}
+
+				// add the current distance to the raymarch step length
+				t += result.distance;
+			}
+
+			return Dist( -1, INFINITY );
+		}
+
+		// -------------------------------------------------------------------------
+
+		// helper function to obtain the ray direction of the ray going through
+		// the pixel this shader instance is called for
+		Ray getRayForCurrentPixel()
+		{
+			// compute normalized viewport coordinates
+			vec2 pixelCoord = -1.0 + 2.0*(gl_FragCoord.xy / uSettings.resolution);
+
+			// set ray direction
+			return Ray( uCamera.eye, normalize( uCamera.forward * uCamera.focalLength +
+												uCamera.right * pixelCoord.x * uCamera.aspectRatio +
+												uCamera.up * pixelCoord.y) );
+			
+			//OK, we are raymarching, so uv is the pixelCoord
+			// ray origin = uCamera.eye;
+			// ray direction = normalize( uCamera.forward * uCamera.focalLength +
+			//  uCamera.right * pixelCoord.x * uCamera.aspectRatio +
+			//  uCamera.up * pixelCoord.y);
+		}
+
+
+		// main raytracing loop, automatically called for each viewport pixel
+		void main(void)
+		{
+		
+			// compute initial (primary) ray origin and direction
+			Ray r = getRayForCurrentPixel();
+			// uv is pixelCoord;
+			// ray origin = uCamera.eye;
+			// ray direction = normalize( uCamera.forward * uCamera.focalLength +
+			//  uCamera.right * pixelCoord.x * uCamera.aspectRatio +
+			//  uCamera.up * pixelCoord.y);
+
+			vec3 finalColor = vec3(0,0,0);
+			vec3 col = vec3(0,0,0);
+
+			// determine the closest object hit along the ray
+			Dist hit = raymarch( r );
+
+
+			//  we use this distance to get the color, with material and lighting factored in
+
+			// t starts at 0 and goes until hit something or goes to a very large number(-1,INFINITY)
+
+			// if an object was hit, add light reflected from it
+			// to overall light along the current ray
+			if( hit.index != -1 )
+			{
+				vec3 pos = r.o + r.d * hit.distance;
+				vec3 nrm = nScene( pos );
+
+				vec3 Cd = vec3(0);
+
+				// based upon the index of the object hit,
+				// set material properties (for now only diffuse color Cd)
+				if( hit.index == 1 )
+				{
+					// the plane shall have a checkerboard pattern
+					float f = mod( floor(2.0*pos.z) + floor(2.0*pos.x), 2.0);
+
+					Cd = vec3( 0.8 + 0.1*f*vec3(1.0) );
+				}
+				else if( hit.index == 2 )
+				{
+					// thist sphere shall be red
+					Cd = vec3( 1.0, 1.0, 0.0 );
+
+				
+				}
+				else if( hit.index == 3 )
+				{
+					// thist sphere shall be blue
+					Cd = vec3( 1.0, 0.5, 0.5 );
+				}
+
+				else if( hit.index == 4 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 1.0, 0.2, 1.0 );
+				}
+
+				
+				else if( hit.index == 5 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.0, 1.0, 1.0 );
+				}
+
+				else if( hit.index == 6 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.5, 0.5, 0.5 );
+				}
+
+				else if( hit.index == 7 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 1.0, 0.2, 0.2 );
+				}
+
+				else if( hit.index == 8 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.8, 1.0, 0.8 );
+				}
+
+
+				else if( hit.index == 9 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.6, 1.0, 0.8 );
+				}
+
+
+				else if( hit.index == 10 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.0, 1.0, 8.0 );
+				}
+
+
+				else if( hit.index == 11 )
+				{
+					// thist sphere shall be green
+					Cd = vec3( 0.0, 0.8, 1.0 );
+				}
+
+				// Cd is the base color of the point, now we need to calculate how much of that color is reflected by the light depending on the angle of the object to the light
+				//  we need light vector, from material to light, and normal vector
+
+				//ulights[0] and ulights[1]  have position and light color
+				vec3 lightVec1 = normalize(uLights[0].position - pos);
+
+				nrm = normalize(nrm);
+				vec3 lightVec2 = normalize(uLights[1].position - pos);
+				float dottedLight1 = max(dot(nrm, lightVec1), 0.0);
+				float dottedLight2 = max(dot(nrm, lightVec2), 0.0);
+				
+				
+
+				if (hit.index == 2)
+				{
+					// Calculate reflection
+					vec3 reflectedDir = reflect(r.d, nrm);
+					Ray reflectedRay = Ray(pos + 0.1 * reflectedDir, reflectedDir);
+		
+					// Trace the reflected ray to get the reflected color
+					Dist reflectedHit = raymarch(reflectedRay);
+					if (reflectedHit.index != -1) {
+						vec3 reflectedPos = reflectedRay.o + reflectedRay.d * reflectedHit.distance;
+						vec3 reflectedNormal = nScene(reflectedPos);
+						vec3 reflectedCd = vec3(0.0);
+		
+						// Determine material color for the reflected object
+						if (reflectedHit.index == 1) {
+							float f = mod(floor(2.0 * reflectedPos.z) + floor(2.0 * reflectedPos.x), 2.0);
+							reflectedCd = vec3(0.8 + 0.1 * f * vec3(1.0));
+						} else if (reflectedHit.index == 2) {
+							reflectedCd = vec3(1.0, 1.0, 0.0); // Yellow (sun-like object)
+						}
+		
+						// Calculate reflection contribution based on the material and lighting
+						vec3 reflectedLightVec = normalize(uLights[0].position - reflectedPos);
+						float reflectedDottedLight = max(dot(reflectedNormal, reflectedLightVec), 0.0);
+						finalColor += reflectedDottedLight * reflectedCd;
+					}
+				}
+				else
+				{
+				// normal to the position is nrm
+				// add light to overall color
+				finalColor += vec3(min(dottedLight1 + dottedLight2, 1.0) * Cd.x, min(dottedLight1 + dottedLight2, 1.0) * Cd.y, min(dottedLight1 + dottedLight2, 1.0) * Cd.z);
+				}
+				// now calculate shadows
+				
+				//dist to light source
+				vec3 lightDir1 = normalize(uLights[0].position) - normalize(pos);
+				lightDir1 = normalize(lightDir1);
+				float distToLightSource1 = length(uLights[0].position - pos);
+				vec3 lightDir2 = normalize(uLights[1].position) - normalize(pos);
+				lightDir2 = normalize(lightDir2);
+				float distToLightSource2 = length(uLights[1].position - pos);
+				nrm = normalize(nrm);
+				
+				Ray r1;
+				r1.o = pos * nrm * 0.1;
+				r1.d = normalize(uLights[0].position - pos);
+				Dist diist = raymarch(r1);
+				Ray r2;
+				r2.o = pos * nrm * 0.1;
+				r2.d = lightDir2;
+				Dist diist2 = raymarch(r2);
+
+				if (diist.index != -1)
+				{
+					if (diist.distance < distToLightSource1)
+					{
+						finalColor = finalColor * vec3(0.25);
+					
+					}
+				}
+
+				if (diist2.index != -1)
+				{
+					if (diist2.distance < distToLightSource2);
+					{
+			//			finalColor = finalColor * vec3(0.25);
+					}
+				}
+			}
+
+			// output pixel color
+			gl_FragColor = vec4( finalColor , 1.0 );
+
+		}
+	</script>
+
+	<script type="text/javascript">
+		// Create Renderer Object
+		var renderer = new Renderer(
+			document.getElementById('canvas'),	// Canvas element
+			600,	// height
+			1200,	// width
+			document.getElementById('iFocalLength'), // FocalLength input element
+			document.getElementById('iEpsilon')      // Epsilon input element
+		);
+    </script>
+  </body>
+</html>
